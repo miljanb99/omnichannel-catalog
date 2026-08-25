@@ -1,0 +1,30 @@
+services:
+  mongo:
+    image: mongo:8.0
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27018:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }).ok }"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 3s
+    volumes:
+      - mongo-data:/data/db
+
+  host:
+    build:
+      context: .
+      dockerfile: src/OmniChannel.Catalog.Host/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - MongoDb__ConnectionString=mongodb://mongo:27017/?replicaSet=rs0&directConnection=true
+      - MongoDb__DatabaseName=omnichannelCatalog
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+volumes:
+  mongo-data:

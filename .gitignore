@@ -1,0 +1,18 @@
+# .NET build izlaz
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# README-ovi se ne verzionišu
+README.md

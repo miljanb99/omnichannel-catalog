@@ -1,0 +1,11 @@
+global using MongoDB.Bson;
+global using MongoDB.Driver;
+global using MongoDB.Bson.Serialization;
+global using MongoDB.Bson.Serialization.Conventions;
+global using MongoDB.Bson.Serialization.Serializers;
+global using Microsoft.Extensions.DependencyInjection;
+global using Microsoft.Extensions.Options;
+global using OmniChannel.Catalog.Core.Configuration;
+global using OmniChannel.Catalog.Core.Domain;
+global using OmniChannel.Catalog.Core.Domain.Model.Entities;
+global using OmniChannel.Catalog.Core.Domain.Repositories;

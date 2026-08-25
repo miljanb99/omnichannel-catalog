@@ -1,0 +1,14 @@
+global using MongoDB.Bson;
+global using MongoDB.Driver;
+global using Microsoft.Extensions.Options;
+global using Microsoft.Extensions.Logging;
+global using Microsoft.AspNetCore.SignalR;
+global using System.Globalization;
+global using System.Text;
+global using System.Threading.Channels;
+global using OmniChannel.Catalog.Core.Configuration;
+global using OmniChannel.Catalog.Core.Domain;
+global using OmniChannel.Catalog.Core.Domain.Constants;
+global using OmniChannel.Catalog.Core.Domain.Model.Entities;
+global using OmniChannel.Catalog.Core.Domain.Repositories;
+global using OmniChannel.Catalog.Core.Messages;

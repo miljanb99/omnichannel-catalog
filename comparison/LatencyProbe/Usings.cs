@@ -1,0 +1,9 @@
+global using System.Collections.Concurrent;
+global using System.Diagnostics;
+global using System.Text;
+global using MongoDB.Bson;
+global using MongoDB.Bson.Serialization;
+global using MongoDB.Driver;
+global using Confluent.Kafka;
+global using Confluent.Kafka.Admin;
+global using EventStore.Client;

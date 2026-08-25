@@ -1,0 +1,15 @@
+{
+  "name": "catalog-mongodb-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.mongodb.MongoDbConnector",
+    "mongodb.connection.string": "mongodb://host.docker.internal:27017/?replicaSet=rs0&directConnection=true",
+    "topic.prefix": "catalog",
+    "database.include.list": "omnichannelCatalog",
+    "collection.include.list": "omnichannelCatalog.listingsProprietaryStates,omnichannelCatalog.listingsObservedStates",
+    "capture.mode": "change_streams_update_full",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": false,
+    "value.converter.schemas.enable": false
+  }
+}

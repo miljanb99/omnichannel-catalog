@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\OmniChannel.Catalog.Core\OmniChannel.Catalog.Core.csproj" />
+    <ProjectReference Include="..\OmniChannel.Catalog.Data\OmniChannel.Catalog.Data.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="catalogs\**\*.csv" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

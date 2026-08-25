@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OmniChannel.Catalog — kontrolna tabla</title>
+  <script src="/lib/signalr.min.js"></script>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #0d1117; color: #e6edf3; font-size: 14px; }
+    header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: #161b22; border-bottom: 1px solid #30363d; position: sticky; top: 0; z-index: 20; }
+    header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+    .status { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #f85149; }
+    .dot.on { background: #3fb950; }
+    main { padding: 20px; display: grid; gap: 20px; grid-template-columns: 1fr; max-width: 1500px; margin: 0 auto; }
+    .panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+    .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #8b949e; margin: 0 0 12px; }
+    .group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; background: #0d1117; border: 1px solid #21262d; border-radius: 8px; }
+    .group + .group { margin-top: 10px; }
+    .group-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #8b949e; width: 74px; flex: none; line-height: 1.3; }
+    .sep { width: 1px; align-self: stretch; background: #21262d; margin: 0 4px; }
+    button { background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+    button:hover { background: #30363d; }
+    button.primary { background: #238636; border-color: #2ea043; }
+    button.danger { background: #491c1c; border-color: #6e2222; }
+    button.paused { background: #3a2e10; border-color: #9e7a1a; color: #f0c674; }
+    button.accept { border-color: #2d5c3a; }
+    button.reject { border-color: #6e2222; }
+    select, input { background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+    input:focus, select:focus { outline: none; border-color: #58a6ff; }
+    .tablewrap { overflow: auto; max-height: 62vh; border: 1px solid #21262d; border-radius: 6px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #21262d; font-size: 13px; white-space: nowrap; }
+    th { color: #8b949e; font-weight: 500; font-size: 12px; position: sticky; top: 0; background: #161b22; z-index: 1; }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: #1c2128; }
+    tbody tr.sel { background: #17243b; box-shadow: inset 3px 0 0 #58a6ff; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+    .b-published { background: #12331c; color: #3fb950; }
+    .b-pending { background: #3a2e10; color: #d29922; }
+    .b-rejected { background: #491c1c; color: #f85149; }
+    .b-withdrawn { background: #30363d; color: #8b949e; }
+    .b-draft { background: #1c2b45; color: #58a6ff; }
+    .draft { color: #58a6ff; }
+    .muted { color: #8b949e; }
+    .summary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+    .summary .count { font-size: 12px; color: #8b949e; }
+    tr.flash { animation: flash 1s ease-out; }
+    @keyframes flash { from { background: #1f6feb44; } to { background: transparent; } }
+    #log { font-family: ui-monospace, monospace; font-size: 12px; max-height: 260px; overflow-y: auto; line-height: 1.6; }
+    #log div { border-bottom: 1px solid #21262d; padding: 2px 0; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 980px) { .grid2 { grid-template-columns: 1fr; } .group-label { width: 100%; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>OmniChannel.Catalog</h1>
+    <span class="muted">MongoDB Change Streams — reaktivni katalog</span>
+    <div class="status"><span id="dot" class="dot"></span><span id="conn">povezivanje…</span></div>
+  </header>
+  <main>
+    <div class="panel">
+      <h2>Meni</h2>
+
+      <div class="group" title="administracija demonstratora">
+        <span class="group-label">Katalog</span>
+        <select id="datasetSel" title="izbor kataloga (CSV iz foldera catalogs/)"></select>
+        <button class="primary" onclick="seed()">Učitaj katalog</button>
+        <span class="sep"></span>
+        <button onclick="replay()" title="briše materijalizovane poglede i gradi ih ponovo iz append-only logova">Resetuj stanje kataloga</button>
+        <button onclick="api('/api/admin/drop-resume-tokens','POST')" title="briše resume tokene osmatrača">Brisanje kontrolnih tačaka</button>
+        <button class="danger" onclick="reset()" title="briše sve podatke — logove, tekuće stanje i tokene">Obriši sve listinge</button>
+      </div>
+
+      <div class="group" title="akcije trgovca — upisuju se u proprietary log (željeno stanje)">
+        <span class="group-label">Trgovac</span>
+        <select id="listingSel" style="min-width:320px"></select>
+        <input id="priceInp" type="number" step="0.01" placeholder="nova cena (RSD)" style="width:150px" />
+        <button onclick="changePrice()">Promeni cenu</button>
+        <button onclick="discardDraft()" title="poništava nacrt — listing se vraća na ono što kanal trenutno prijavljuje">Otkaži izmenu</button>
+        <span class="sep"></span>
+        <button onclick="withdrawListing()">Povuci artikal</button>
+        <button onclick="republishListing()" title="vraća želju na published — listing ponovo ulazi u ciklus potvrde">Vrati u prodaju</button>
+      </div>
+
+      <div class="group" title="akcije kanala — upisuju se u observed log (posmatrano stanje)">
+        <span class="group-label">Kanal</span>
+        <button id="simBtn" onclick="toggleSim()" title="pauzira simulirani kanal — nacrti tada ostaju u stanju pending">Pauziraj kanal</button>
+        <span class="sep"></span>
+        <button class="accept" onclick="acceptListing()" title="kanal potvrđuje traženu izmenu — nacrt se objavljuje">Prihvati na kanalu</button>
+        <button class="reject" onclick="rejectListing()" title="kanal odbija listing — nacrt ostaje sačuvan">Odbij na kanalu</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Listinzi po kanalima (tekuće stanje)</h2>
+      <div class="summary">
+        <input id="searchInp" placeholder="pretraga — naziv, kanal, kategorija, status…" style="width:340px" oninput="renderListings()" />
+        <button onclick="clearSearch()" title="poništi pretragu">Poništi</button>
+        <span id="listingCount" class="count"></span>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th>Kanal</th><th>Naziv</th><th>Kategorija</th><th class="num">Cena</th><th>Dostupno</th>
+            <th>Željeni</th><th>Status kanala</th><th>Objava</th><th>Napomena</th><th>Ažurirano</th>
+          </tr></thead>
+          <tbody id="listings"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <h2>Proizvodi</h2>
+        <div class="tablewrap" style="max-height:300px">
+          <table>
+            <thead><tr><th>Naziv</th><th class="num">Osn. cena</th><th>Kategorija</th><th>Uklonjen</th></tr></thead>
+            <tbody id="products"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Tok događaja (SignalR)</h2>
+        <div id="log"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const listings = new Map();
+    const products = new Map();
+
+    function fmtPrice(dsf) {
+      if (!dsf) return '<span class="muted">—</span>';
+      if (dsf.hasDraft) return `<span class="draft">${dsf.draft} ⏳</span> <span class="muted">(bilo ${dsf.active ?? '—'})</span>`;
+      return dsf.active != null ? String(dsf.active) : '<span class="muted">—</span>';
+    }
+    function fmtBool(dsf) {
+      if (!dsf) return '<span class="muted">—</span>';
+      const v = dsf.hasDraft ? dsf.draft : dsf.active;
+      return v ? 'da' : 'ne';
+    }
+    function badge(status) {
+      const cls = { published: 'b-published', pending: 'b-pending', rejected: 'b-rejected', withdrawn: 'b-withdrawn', draft: 'b-draft' }[status] || 'b-draft';
+      return `<span class="badge ${cls}">${status ?? '—'}</span>`;
+    }
+    function fmtTime(t) { return t ? new Date(t).toLocaleTimeString('sr-RS') : '—'; }
+    function categoryOf(l) { return products.get(l.productId)?.category ?? ''; }
+    function labelOf(l) { return `${l.channel} · ${l.title?.active ?? l.title?.draft ?? l.entityId}`; }
+
+    function matches(l, terms) {
+      if (!terms.length) return true;
+      const hay = [l.channel, l.title?.active, l.title?.draft, categoryOf(l),
+                   l.desiredStatus, l.effectiveStatus, l.publishStatus, l.moderationNote]
+        .filter(Boolean).join(' ').toLowerCase();
+      return terms.every(t => hay.includes(t));
+    }
+    function clearSearch() { document.getElementById('searchInp').value = ''; renderListings(); }
+
+    function selectListing(id) {
+      document.getElementById('listingSel').value = id;
+      renderListings();
+    }
+
+    function renderListings() {
+      const terms = document.getElementById('searchInp').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const all = [...listings.values()].sort((a, b) => (a.channel + a.entityId).localeCompare(b.channel + b.entityId));
+      const rows = all.filter(l => matches(l, terms));
+      const selected = document.getElementById('listingSel').value;
+
+      document.getElementById('listings').innerHTML = rows.map(l => `
+        <tr id="row-${l.entityId}" onclick="selectListing('${l.entityId}')"
+            class="${l.entityId === selected ? 'sel' : ''}" ${l.removed ? 'style="opacity:.4"' : ''}>
+          <td>${l.channel}</td>
+          <td>${l.title?.hasDraft ? '<span class="draft">' + l.title.draft + ' ⏳</span>' : (l.title?.active ?? '—')}</td>
+          <td class="muted">${categoryOf(l) || '—'}</td>
+          <td class="num">${fmtPrice(l.price)}</td>
+          <td>${fmtBool(l.available)}</td>
+          <td>${l.desiredStatus ?? '—'}</td>
+          <td>${l.effectiveStatus ?? '<span class="muted">—</span>'}</td>
+          <td>${badge(l.publishStatus)}</td>
+          <td class="muted">${l.moderationNote ?? ''}</td>
+          <td class="muted">${fmtTime(l.updatedAt)}</td>
+        </tr>`).join('');
+
+      const counts = rows.reduce((acc, l) => (acc[l.publishStatus] = (acc[l.publishStatus] || 0) + 1, acc), {});
+      const chips = ['published', 'pending', 'rejected', 'withdrawn']
+        .filter(s => counts[s]).map(s => `${badge(s)} ${counts[s]}`).join(' ');
+      document.getElementById('listingCount').innerHTML =
+        `prikazano <b>${rows.length}</b> od ${all.length} &nbsp; ${chips}`;
+
+      const sel = document.getElementById('listingSel');
+      const options = rows.filter(l => !l.removed);
+      if (selected && !options.some(l => l.entityId === selected) && listings.has(selected)) {
+        options.unshift(listings.get(selected));
+      }
+      sel.innerHTML = options.map(l => `<option value="${l.entityId}">${labelOf(l)}</option>`).join('');
+      if ([...sel.options].some(o => o.value === selected)) sel.value = selected;
+    }
+    function renderProducts() {
+      document.getElementById('products').innerHTML = [...products.values()].map(p => `
+        <tr id="row-${p.entityId}" ${p.removed ? 'style="opacity:.4"' : ''}>
+          <td>${p.title?.active ?? '—'}</td>
+          <td class="num">${p.basePrice?.active ?? '—'}</td>
+          <td class="muted">${p.category ?? '—'}</td>
+          <td>${p.removed ? 'da' : 'ne'}</td>
+        </tr>`).join('');
+    }
+    function flash(entityId) {
+      const row = document.getElementById('row-' + entityId);
+      if (row) { row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash'); }
+    }
+    function log(msg) {
+      const el = document.getElementById('log');
+      const line = document.createElement('div');
+      line.textContent = `${new Date().toLocaleTimeString('sr-RS')}  ${msg}`;
+      el.prepend(line);
+      while (el.childNodes.length > 100) el.removeChild(el.lastChild);
+    }
+
+    async function api(url, method, body) {
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+      return res.ok ? res.json().catch(() => ({})) : Promise.reject(await res.text());
+    }
+    async function loadSnapshot() {
+      const snap = await api('/api/current', 'GET');
+      listings.clear(); products.clear();
+      (snap.listings || []).forEach(l => listings.set(l.entityId, l));
+      (snap.products || []).forEach(p => products.set(p.entityId, p));
+      renderListings(); renderProducts();
+    }
+    async function loadDatasets() {
+      const names = await api('/api/admin/datasets', 'GET');
+      const sel = document.getElementById('datasetSel');
+      const cur = sel.value;
+      sel.innerHTML = (names || []).map(n => `<option value="${n}">${n}</option>`).join('');
+      if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+      else if ([...sel.options].some(o => o.value === 'patike')) sel.value = 'patike';
+    }
+    async function seed() {
+      const ds = document.getElementById('datasetSel').value;
+      const r = await api('/api/admin/seed?dataset=' + encodeURIComponent(ds), 'POST');
+      log(`učitan katalog "${ds}": ${r.count} listinga`);
+    }
+    async function replay() { const r = await api('/api/admin/replay', 'POST'); log('replay: ' + JSON.stringify(r)); await loadSnapshot(); }
+    async function reset() { await api('/api/admin/reset', 'POST'); listings.clear(); products.clear(); renderListings(); renderProducts(); log('reset'); }
+    function selectedListing() {
+      const id = document.getElementById('listingSel').value;
+      return id ? { id, listing: listings.get(id) } : { id: null, listing: null };
+    }
+    async function changePrice() {
+      const { id } = selectedListing();
+      const price = parseFloat(document.getElementById('priceInp').value);
+      if (!id || isNaN(price)) return;
+      await api('/api/listings/' + id, 'PUT', { price });
+      log(`izmena cene listinga ${id} -> ${price}`);
+    }
+    let simEnabled = true;
+    function renderSim() {
+      const btn = document.getElementById('simBtn');
+      btn.textContent = simEnabled ? 'Pauziraj kanal' : 'Pokreni kanal';
+      btn.classList.toggle('paused', !simEnabled);
+    }
+    async function loadSim() {
+      const state = await api('/api/admin/simulator', 'GET');
+      simEnabled = state.enabled;
+      renderSim();
+    }
+    async function toggleSim() {
+      const state = await api('/api/admin/simulator', 'POST', { enabled: !simEnabled });
+      simEnabled = state.enabled;
+      renderSim();
+      log(simEnabled ? 'kanal ponovo javlja stanje' : 'kanal pauziran — nacrti ostaju u stanju pending');
+    }
+    async function discardDraft() {
+      const { id } = selectedListing();
+      if (!id) return;
+      await api('/api/listings/' + id + '/discard-draft', 'POST');
+      log('otkazivanje nacrta listinga ' + id);
+    }
+    function effective(field) { return field?.hasDraft ? field.draft : field?.active; }
+    async function acceptListing() {
+      const { id, listing } = selectedListing();
+      if (!id || !listing) return;
+      await api('/api/channel/' + id + '/observe', 'POST', {
+        effectiveStatus: 'active',
+        observedPrice: effective(listing.price),
+        available: effective(listing.available)
+      });
+      log(`kanal prihvata izmenu listinga ${id} (cena ${effective(listing.price)})`);
+    }
+    async function rejectListing() {
+      const { id } = selectedListing();
+      if (!id) return;
+      await api('/api/channel/' + id + '/reject', 'POST', { note: 'Promena je odbijena, postavi novu' });
+      log('odbijanje listinga ' + id);
+    }
+    async function withdrawListing() {
+      const { id } = selectedListing();
+      if (!id) return;
+      await api('/api/listings/' + id, 'PUT', { desiredStatus: 'withdrawn' });
+      log('povlačenje listinga ' + id);
+    }
+    async function republishListing() {
+      const { id } = selectedListing();
+      if (!id) return;
+      await api('/api/listings/' + id, 'PUT', { desiredStatus: 'published' });
+      log('vraćanje listinga u prodaju ' + id);
+    }
+
+    function onUpdate(map, render, label) {
+      return (msg) => {
+        if (msg.changeType === 'deleted') { map.delete(msg.entityId); }
+        else if (msg.payload) { map.set(msg.entityId, msg.payload); }
+        render();
+        flash(msg.entityId);
+        log(`${label} · ${msg.changeType} · ${msg.entityId}`);
+      };
+    }
+
+    const connection = new signalR.HubConnectionBuilder().withUrl('/hub/catalog').withAutomaticReconnect().build();
+    connection.on('listingUpdate', onUpdate(listings, renderListings, 'listing'));
+    connection.on('productUpdate', onUpdate(products, () => { renderProducts(); renderListings(); }, 'proizvod'));
+    connection.on('variantUpdate', (msg) => log(`varijanta · ${msg.changeType} · ${msg.entityId}`));
+    connection.onreconnected(() => { setConn(true); loadSnapshot(); });
+    connection.onclose(() => setConn(false));
+    function setConn(on) {
+      document.getElementById('dot').classList.toggle('on', on);
+      document.getElementById('conn').textContent = on ? 'povezano' : 'prekinuto';
+    }
+    document.getElementById('listingSel').addEventListener('change', renderListings);
+    loadDatasets(); loadSnapshot(); loadSim();
+    connection.start().then(() => setConn(true)).catch(e => { setConn(false); log('SignalR nedostupan, tabla radi bez žive isporuke: ' + e); });
+  </script>
+</body>
+</html>

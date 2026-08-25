@@ -1,0 +1,19 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/bench/">
+    <Project Path="bench/OmniChannel.Catalog.Bench/OmniChannel.Catalog.Bench.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/OmniChannel.Catalog.Core/OmniChannel.Catalog.Core.csproj" />
+    <Project Path="src/OmniChannel.Catalog.Data/OmniChannel.Catalog.Data.csproj" />
+    <Project Path="src/OmniChannel.Catalog.Host/OmniChannel.Catalog.Host.csproj" />
+    <Project Path="src/OmniChannel.Catalog.Replay/OmniChannel.Catalog.Replay.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OmniChannel.Catalog.Tests/OmniChannel.Catalog.Tests.csproj" />
+  </Folder>
+</Solution>
