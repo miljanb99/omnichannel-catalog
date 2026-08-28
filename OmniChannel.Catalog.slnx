@@ -7,6 +7,9 @@
   <Folder Name="/bench/">
     <Project Path="bench/OmniChannel.Catalog.Bench/OmniChannel.Catalog.Bench.csproj" />
   </Folder>
+  <Folder Name="/comparison/">
+    <Project Path="comparison/LatencyProbe/OmniChannel.Catalog.LatencyProbe.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/OmniChannel.Catalog.Core/OmniChannel.Catalog.Core.csproj" />
     <Project Path="src/OmniChannel.Catalog.Data/OmniChannel.Catalog.Data.csproj" />
