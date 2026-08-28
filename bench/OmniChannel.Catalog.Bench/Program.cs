@@ -7,8 +7,9 @@ using OmniChannel.Catalog.Core.Domain.Repositories;
 using OmniChannel.Catalog.Data;
 using OmniChannel.Catalog.Host.HostedServices;
 
-var connection = args.Length > 0 && args[0] != "scale" ? args[0] : "mongodb://localhost:27018/?replicaSet=rs0&directConnection=true";
+var connection = args.FirstOrDefault(a => a.StartsWith("mongodb://")) ?? "mongodb://localhost:27018/?replicaSet=rs0&directConnection=true";
 var scenarios = new[] { 100, 1000, 5000, 10000, 20000 };
+var projectorWorkers = int.Parse(args.FirstOrDefault(a => a.StartsWith("pw="))?[3..] ?? "8");
 const int warmupEvents = 500;
 const int repetitions = 3;
 
@@ -18,7 +19,7 @@ services.Configure<MongoDbSettings>(options =>
 {
     options.ConnectionString = connection;
     options.DatabaseName = "benchCatalog";
-    options.ParallelWorkers = 8;
+    options.ParallelWorkers = projectorWorkers;
     options.ResumeTokenSaveInterval = 500;
     options.MaxAwaitTimeMs = 100;
     options.BatchSize = 1000;
@@ -96,7 +97,7 @@ if (args.Contains("scale"))
 
     async Task<(double med, double p95, double p99)> MeasureRepeated(string tag, bool clearBetween)
     {
-        List<double> med = [], p95 = [], p99 = [];
+        List<double> medians = [], p95s = [], p99s = [];
         for (var r = 0; r < repetitions; r++)
         {
             if (clearBetween)
@@ -105,25 +106,25 @@ if (args.Contains("scale"))
             }
 
             var m = await Measure($"{tag}{r}");
-            med.Add(m.med);
-            p95.Add(m.p95);
-            p99.Add(m.p99);
-            Console.WriteLine($"    {tag} iteracija {r + 1}/{repetitions}: median={m.med:F1} p95={m.p95:F1} p99={m.p99:F1}");
+            medians.Add(m.med);
+            p95s.Add(m.p95);
+            p99s.Add(m.p99);
+            Console.WriteLine($"    {tag} iteration {r + 1}/{repetitions}: median={m.med:F1} p95={m.p95:F1} p99={m.p99:F1}");
         }
 
-        return (MedianOf(med), MedianOf(p95), MedianOf(p99));
+        return (MedianOf(medians), MedianOf(p95s), MedianOf(p99s));
     }
 
     await ClearAsync(500);
-    Console.WriteLine($"zagrevanje ({batch} događaja, rezultat se odbacuje) ...");
+    Console.WriteLine($"warmup: {batch} events, discarded ...");
     await Measure("warm");
 
     var b = await MeasureRepeated("base", clearBetween: true);
-    Console.WriteLine($"baseline (prazna kolekcija):   median={b.med:F1} ms   p95={b.p95:F1} ms   p99={b.p99:F1} ms");
+    Console.WriteLine($"{"baseline (empty collection)",-32}median={b.med:F1} ms   p95={b.p95:F1} ms   p99={b.p99:F1} ms");
 
     await ClearAsync(300);
 
-    Console.WriteLine($"punjenje {prefill:N0} dokumenata u listingsCurrentState ...");
+    Console.WriteLine($"prefilling {prefill:N0} documents into listingsCurrentState ...");
     const int chunk = 20000;
     var past = DateTime.UtcNow.AddHours(-1);
     var swp = System.Diagnostics.Stopwatch.StartNew();
@@ -154,18 +155,97 @@ if (args.Contains("scale"))
 
     var total = await context.ListingsCurrent.CountDocumentsAsync(FilterDefinition<ListingCurrentState>.Empty);
     var stats = await db.RunCommandAsync<BsonDocument>(new BsonDocument { { "collStats", settings.ListingsCurrentStateCollectionName } });
-    Console.WriteLine($"napunjeno: {total:N0} dokumenata, ~{stats["size"].ToInt64() / 1024 / 1024:N0} MB, za {swp.Elapsed.TotalSeconds:F0}s");
+    Console.WriteLine($"prefilled: {total:N0} documents, ~{stats["size"].ToInt64() / 1024 / 1024:N0} MB, in {swp.Elapsed.TotalSeconds:F0}s");
 
     var s = await MeasureRepeated("big", clearBetween: false);
-    Console.WriteLine($"nad {total:N0} dokumenata:        median={s.med:F1} ms   p95={s.p95:F1} ms   p99={s.p99:F1} ms");
+    Console.WriteLine($"{$"over {total:N0} documents",-32}median={s.med:F1} ms   p95={s.p95:F1} ms   p99={s.p99:F1} ms");
 
-    Console.WriteLine("pražnjenje kolekcije radi kontrolnog merenja ...");
+    Console.WriteLine("clearing collection for control measurement ...");
     var swd = System.Diagnostics.Stopwatch.StartNew();
     await ClearAsync(1000);
-    Console.WriteLine($"  obrisano za {swd.Elapsed.TotalSeconds:F0}s");
+    Console.WriteLine($"  cleared in {swd.Elapsed.TotalSeconds:F0}s");
 
-    var b2 = await MeasureRepeated("base2", clearBetween: true);
-    Console.WriteLine($"kontrola (prazna, posle):      median={b2.med:F1} ms   p95={b2.p95:F1} ms   p99={b2.p99:F1} ms");
+    var c = await MeasureRepeated("control", clearBetween: true);
+    Console.WriteLine($"{"control (empty, after)",-32}median={c.med:F1} ms   p95={c.p95:F1} ms   p99={c.p99:F1} ms");
+
+    await projector.StopAsync(CancellationToken.None);
+    return;
+}
+
+async Task<(double Write, double Materialize, double P95, double P99)> RunParallel(int n, int writers, string tag)
+{
+    await ClearAsync(400);
+
+    var perWriter = n / writers;
+    var actual = perWriter * writers;
+    var start = DateTime.UtcNow;
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+
+    await Task.WhenAll(Enumerable.Range(0, writers).Select(w => Task.Run(async () =>
+    {
+        for (var i = 0; i < perWriter; i++)
+        {
+            await log.InsertAsync(new ListingProprietaryState
+            {
+                EntityId = $"{tag}_{w}_{i}",
+                ProductId = "p",
+                VariantId = "v",
+                Channel = SalesChannel.Webshop,
+                Title = "bench",
+                Price = 10m,
+                Available = true,
+                DesiredStatus = PublishStatus.Published
+            }, CancellationToken.None);
+        }
+    })));
+
+    var writeSeconds = sw.Elapsed.TotalSeconds;
+
+    while (await context.ListingsCurrent.CountDocumentsAsync(FilterDefinition<ListingCurrentState>.Empty) < actual)
+    {
+        await Task.Delay(50);
+    }
+
+    var all = await listings.GetAllAsync(CancellationToken.None);
+    var latencies = all
+        .Where(x => x.LastProprietaryAt.HasValue)
+        .Select(x => (x.UpdatedAt - x.LastProprietaryAt!.Value).TotalMilliseconds)
+        .OrderBy(x => x)
+        .ToList();
+
+    return (actual / writeSeconds,
+        actual / (all.Max(x => x.UpdatedAt) - start).TotalSeconds,
+        Percentile(latencies, 0.95),
+        Percentile(latencies, 0.99));
+}
+
+if (args.Contains("parallel"))
+{
+    var pi = Array.IndexOf(args, "parallel");
+    var events = args.Length > pi + 1 ? int.Parse(args[pi + 1]) : 20000;
+    var writerCounts = args.Length > pi + 2
+        ? args[pi + 2].Split(',').Select(int.Parse).ToArray()
+        : [1, 2, 4, 8, 16, 32];
+
+    Console.WriteLine("warmup: 2000 events with 4 writers, discarded ...");
+    await RunParallel(2000, 4, "warm");
+
+    Console.WriteLine($"projector workers: {projectorWorkers}");
+    Console.WriteLine($"{"writers",-11}{"write/s",10}{"materialize/s",16}{"p95 ms",10}{"p99 ms",10}");
+    foreach (var w in writerCounts)
+    {
+        List<double> writes = [], materialized = [], p95s = [], p99s = [];
+        for (var r = 0; r < repetitions; r++)
+        {
+            var (write, materialize, p95, p99) = await RunParallel(events, w, $"p_{w}_{r}");
+            writes.Add(write);
+            materialized.Add(materialize);
+            p95s.Add(p95);
+            p99s.Add(p99);
+        }
+
+        Console.WriteLine($"{w,-11}{MedianOf(writes),10:F0}{MedianOf(materialized),16:F0}{MedianOf(p95s),10:F1}{MedianOf(p99s),10:F1}");
+    }
 
     await projector.StopAsync(CancellationToken.None);
     return;
@@ -207,23 +287,23 @@ async Task<(double Median, double P95, double P99, double Throughput)> RunScenar
         n / (all.Max(x => x.UpdatedAt) - start).TotalSeconds);
 }
 
-Console.WriteLine($"zagrevanje ({warmupEvents} događaja, rezultat se odbacuje) ...");
+Console.WriteLine($"warmup: {warmupEvents} events, discarded ...");
 await RunScenario(warmupEvents, "warm");
 
 Console.WriteLine($"{"scenario",-16}{"count",8}{"median ms",12}{"p95 ms",10}{"p99 ms",10}{"throughput/s",14}");
 foreach (var n in scenarios)
 {
-    List<double> med = [], p95 = [], p99 = [], thr = [];
+    List<double> medians = [], p95s = [], p99s = [], throughputs = [];
     for (var r = 0; r < repetitions; r++)
     {
         var x = await RunScenario(n, $"b_{n}_{r}");
-        med.Add(x.Median);
-        p95.Add(x.P95);
-        p99.Add(x.P99);
-        thr.Add(x.Throughput);
+        medians.Add(x.Median);
+        p95s.Add(x.P95);
+        p99s.Add(x.P99);
+        throughputs.Add(x.Throughput);
     }
 
-    Console.WriteLine($"{n + " događaja",-16}{n,8}{MedianOf(med),12:F1}{MedianOf(p95),10:F1}{MedianOf(p99),10:F1}{MedianOf(thr),14:F0}");
+    Console.WriteLine($"{n + " events",-16}{n,8}{MedianOf(medians),12:F1}{MedianOf(p95s),10:F1}{MedianOf(p99s),10:F1}{MedianOf(throughputs),14:F0}");
 }
 
 await projector.StopAsync(CancellationToken.None);
