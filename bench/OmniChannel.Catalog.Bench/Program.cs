@@ -9,6 +9,8 @@ using OmniChannel.Catalog.Host.HostedServices;
 
 var connection = args.Length > 0 && args[0] != "scale" ? args[0] : "mongodb://localhost:27018/?replicaSet=rs0&directConnection=true";
 var scenarios = new[] { 100, 1000, 5000, 10000, 20000 };
+const int warmupEvents = 500;
+const int repetitions = 3;
 
 var services = new ServiceCollection();
 services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Warning));
@@ -42,6 +44,22 @@ var projector = new ProjectListingsProprietaryService(
 await projector.StartAsync(CancellationToken.None);
 await Task.Delay(1500);
 
+async Task ClearAsync(int settleMs)
+{
+    await context.ListingsProprietary.DeleteManyAsync(FilterDefinition<ListingProprietaryState>.Empty);
+    await context.ListingsCurrent.DeleteManyAsync(FilterDefinition<ListingCurrentState>.Empty);
+    await Task.Delay(settleMs);
+}
+
+static double Percentile(List<double> sorted, double p) =>
+    sorted[Math.Min(sorted.Count - 1, (int)(sorted.Count * p))];
+
+static double MedianOf(List<double> values)
+{
+    var sorted = values.OrderBy(x => x).ToList();
+    return sorted[sorted.Count / 2];
+}
+
 if (args.Contains("scale"))
 {
     var si = Array.IndexOf(args, "scale");
@@ -73,20 +91,37 @@ if (args.Contains("scale"))
             .Where(d => d.LastProprietaryAt.HasValue)
             .Select(d => (d.UpdatedAt - d.LastProprietaryAt!.Value).TotalMilliseconds)
             .OrderBy(x => x).ToList();
-        double P(double p) => lat[Math.Min(lat.Count - 1, (int)(lat.Count * p))];
-        return (P(0.5), P(0.95), P(0.99));
+        return (Percentile(lat, 0.5), Percentile(lat, 0.95), Percentile(lat, 0.99));
     }
 
-    await context.ListingsProprietary.DeleteManyAsync(FilterDefinition<ListingProprietaryState>.Empty);
-    await context.ListingsCurrent.DeleteManyAsync(FilterDefinition<ListingCurrentState>.Empty);
-    await Task.Delay(500);
+    async Task<(double med, double p95, double p99)> MeasureRepeated(string tag, bool clearBetween)
+    {
+        List<double> med = [], p95 = [], p99 = [];
+        for (var r = 0; r < repetitions; r++)
+        {
+            if (clearBetween)
+            {
+                await ClearAsync(300);
+            }
 
-    var b = await Measure("base");
+            var m = await Measure($"{tag}{r}");
+            med.Add(m.med);
+            p95.Add(m.p95);
+            p99.Add(m.p99);
+            Console.WriteLine($"    {tag} iteracija {r + 1}/{repetitions}: median={m.med:F1} p95={m.p95:F1} p99={m.p99:F1}");
+        }
+
+        return (MedianOf(med), MedianOf(p95), MedianOf(p99));
+    }
+
+    await ClearAsync(500);
+    Console.WriteLine($"zagrevanje ({batch} događaja, rezultat se odbacuje) ...");
+    await Measure("warm");
+
+    var b = await MeasureRepeated("base", clearBetween: true);
     Console.WriteLine($"baseline (prazna kolekcija):   median={b.med:F1} ms   p95={b.p95:F1} ms   p99={b.p99:F1} ms");
 
-    await context.ListingsProprietary.DeleteManyAsync(FilterDefinition<ListingProprietaryState>.Empty);
-    await context.ListingsCurrent.DeleteManyAsync(FilterDefinition<ListingCurrentState>.Empty);
-    await Task.Delay(300);
+    await ClearAsync(300);
 
     Console.WriteLine($"punjenje {prefill:N0} dokumenata u listingsCurrentState ...");
     const int chunk = 20000;
@@ -121,26 +156,31 @@ if (args.Contains("scale"))
     var stats = await db.RunCommandAsync<BsonDocument>(new BsonDocument { { "collStats", settings.ListingsCurrentStateCollectionName } });
     Console.WriteLine($"napunjeno: {total:N0} dokumenata, ~{stats["size"].ToInt64() / 1024 / 1024:N0} MB, za {swp.Elapsed.TotalSeconds:F0}s");
 
-    var s = await Measure("big");
+    var s = await MeasureRepeated("big", clearBetween: false);
     Console.WriteLine($"nad {total:N0} dokumenata:        median={s.med:F1} ms   p95={s.p95:F1} ms   p99={s.p99:F1} ms");
+
+    Console.WriteLine("pražnjenje kolekcije radi kontrolnog merenja ...");
+    var swd = System.Diagnostics.Stopwatch.StartNew();
+    await ClearAsync(1000);
+    Console.WriteLine($"  obrisano za {swd.Elapsed.TotalSeconds:F0}s");
+
+    var b2 = await MeasureRepeated("base2", clearBetween: true);
+    Console.WriteLine($"kontrola (prazna, posle):      median={b2.med:F1} ms   p95={b2.p95:F1} ms   p99={b2.p99:F1} ms");
 
     await projector.StopAsync(CancellationToken.None);
     return;
 }
 
-Console.WriteLine($"{"scenario",-16}{"count",8}{"median ms",12}{"p95 ms",10}{"throughput/s",14}");
-foreach (var n in scenarios)
+async Task<(double Median, double P95, double P99, double Throughput)> RunScenario(int n, string tag)
 {
-    await context.ListingsProprietary.DeleteManyAsync(FilterDefinition<ListingProprietaryState>.Empty);
-    await context.ListingsCurrent.DeleteManyAsync(FilterDefinition<ListingCurrentState>.Empty);
-    await Task.Delay(400);
+    await ClearAsync(400);
 
     var start = DateTime.UtcNow;
     for (var i = 0; i < n; i++)
     {
         await log.InsertAsync(new ListingProprietaryState
         {
-            EntityId = $"b_{n}_{i}",
+            EntityId = $"{tag}_{i}",
             ProductId = "p",
             VariantId = "v",
             Channel = SalesChannel.Webshop,
@@ -162,11 +202,28 @@ foreach (var n in scenarios)
         .Select(x => (x.UpdatedAt - x.LastProprietaryAt!.Value).TotalMilliseconds)
         .OrderBy(x => x)
         .ToList();
-    var median = latencies[latencies.Count / 2];
-    var p95 = latencies[(int)(latencies.Count * 0.95)];
-    var throughput = n / (all.Max(x => x.UpdatedAt) - start).TotalSeconds;
 
-    Console.WriteLine($"{n + " događaja",-16}{n,8}{median,12:F1}{p95,10:F1}{throughput,14:F0}");
+    return (Percentile(latencies, 0.5), Percentile(latencies, 0.95), Percentile(latencies, 0.99),
+        n / (all.Max(x => x.UpdatedAt) - start).TotalSeconds);
+}
+
+Console.WriteLine($"zagrevanje ({warmupEvents} događaja, rezultat se odbacuje) ...");
+await RunScenario(warmupEvents, "warm");
+
+Console.WriteLine($"{"scenario",-16}{"count",8}{"median ms",12}{"p95 ms",10}{"p99 ms",10}{"throughput/s",14}");
+foreach (var n in scenarios)
+{
+    List<double> med = [], p95 = [], p99 = [], thr = [];
+    for (var r = 0; r < repetitions; r++)
+    {
+        var x = await RunScenario(n, $"b_{n}_{r}");
+        med.Add(x.Median);
+        p95.Add(x.P95);
+        p99.Add(x.P99);
+        thr.Add(x.Throughput);
+    }
+
+    Console.WriteLine($"{n + " događaja",-16}{n,8}{MedianOf(med),12:F1}{MedianOf(p95),10:F1}{MedianOf(p99),10:F1}{MedianOf(thr),14:F0}");
 }
 
 await projector.StopAsync(CancellationToken.None);

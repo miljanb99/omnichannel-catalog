@@ -1,21 +1,25 @@
 var mode = args.Length > 0 ? args[0] : "all";
 var count = args.Length > 1 ? int.Parse(args[1]) : 2000;
+var warmup = args.Length > 2 ? int.Parse(args[2]) : 500;
+var total = warmup + count;
 var payloads = LoadPayloads();
-var ops = BuildOps(count);
+var ops = BuildOps(total);
+var measuredOps = ops.Skip(warmup).ToList();
 
 Console.WriteLine($"payloads: {payloads.Count} real documents, avg {(int)payloads.Average(p => p.ToBson().Length)} B");
-Console.WriteLine($"op mix: {ops.Count(o => o == 'i')} insert, {ops.Count(o => o == 'u')} update, {ops.Count(o => o == 'd')} delete");
-Console.WriteLine($"{"technology",-14}{"n",8}{"median ms",12}{"p95 ms",10}{"p99 ms",10}");
+Console.WriteLine($"warmup: {warmup} events discarded per technology");
+Console.WriteLine($"op mix (measured): {measuredOps.Count(o => o == 'i')} insert, {measuredOps.Count(o => o == 'u')} update, {measuredOps.Count(o => o == 'd')} delete");
+Console.WriteLine($"{"technology",-14}{"n",8}{"median ms",12}{"p95 ms",10}{"p99 ms",10}{"max ms",10}");
 if (mode == "all")
 {
     foreach (var m in new[] { "mongo", "kafka", "eventstore" })
     {
-        await Report(m, count, payloads, ops);
+        await Report(m, total, warmup, payloads, ops);
     }
 }
 else
 {
-    await Report(mode, count, payloads, ops);
+    await Report(mode, total, warmup, payloads, ops);
 }
 
 static List<BsonDocument> LoadPayloads()
@@ -41,17 +45,18 @@ static List<char> BuildOps(int n)
     return ops;
 }
 
-static async Task Report(string mode, int count, List<BsonDocument> payloads, List<char> ops)
+static async Task Report(string mode, int total, int warmup, List<BsonDocument> payloads, List<char> ops)
 {
     var latencies = mode switch
     {
-        "mongo" => await RunMongo(count, payloads, ops),
-        "kafka" => await RunKafka(count, payloads, ops),
-        "eventstore" => await RunEventStore(count, payloads, ops),
+        "mongo" => await RunMongo(total, payloads, ops),
+        "kafka" => await RunKafka(total, payloads, ops),
+        "eventstore" => await RunEventStore(total, payloads, ops),
         _ => throw new ArgumentException($"unknown mode {mode}")
     };
-    latencies.Sort();
-    Console.WriteLine($"{mode,-14}{latencies.Count,8}{Pct(latencies, 50),12:F1}{Pct(latencies, 95),10:F1}{Pct(latencies, 99),10:F1}");
+    var measured = latencies.Skip(warmup).ToList();
+    measured.Sort();
+    Console.WriteLine($"{mode,-14}{measured.Count,8}{Pct(measured, 50),12:F1}{Pct(measured, 95),10:F1}{Pct(measured, 99),10:F1}{measured[^1],10:F1}");
 }
 
 static double Pct(List<double> sorted, int p) => sorted.Count == 0 ? 0 : sorted[Math.Min(sorted.Count - 1, (int)(sorted.Count * p / 100.0))];
